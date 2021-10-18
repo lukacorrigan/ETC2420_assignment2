@@ -1,0 +1,111 @@
+---
+title: "Assignment_2"
+author: "Luka.C"
+date: "08/10/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+library(tidyverse)
+library(broom)
+library(dplyr)
+library(knitr)
+library(tidymodels)
+options(digits = 5)
+```
+
+
+```{r}
+df <- read.csv("neonatal_mortality.csv")
+```
+
+```{r}
+df_scaled <- mutate(df,
+                    nmr_log = log(nmr/(u5mr-nmr)),
+                    u5mr_log = log(u5mr))
+
+```
+
+```{r model selection}
+model_1 <- lm(nmr_log ~ year + region + u5mr_log, data = df_scaled)
+model_2 <- lm(nmr_log ~ year + region + u5mr_log + region*u5mr_log, data = df_scaled)
+model_selec <- tibble("Model" = c(1, 2), "Adjusted R Squared" = c(summary(model_1)$adj.r.squared, summary(model_2)$adj.r.squared))
+kable(model_selec)
+```
+
+```{r fit diagnostics all}
+model_2_aug <- augment(model_2)
+model_2_aug <- cbind(model_2_aug, df_scaled[c("country_name")])
+model_2 %>% ggplot(aes(x = .fitted, y = .resid)) + geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0,
+             linetype = "dashed",
+             colour = "blue") +
+  theme_bw()
+```
+
+```{r fit diagnostics region}
+model_2_aug %>% ggplot(aes(x = .fitted, y = .resid)) + geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0,
+             linetype = "dashed",
+             colour = "blue") +
+  facet_wrap(~ region, scales = "free") +
+  theme_bw() 
+```
+
+```{r}
+model_2_aug %>% filter(country_name == c("Senegal", "Peru", "Australia")) %>%
+  ggplot(aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0,
+             linetype = "dashed",
+             colour = "blue") +
+  facet_wrap(~ country_name, scales = "free_x")
+```
+
+```{r mse on test set}
+df_scaled_split <- initial_split(df_scaled, strata = region)
+df_scaled_test <- testing(df_scaled_split)
+```
+
+```{r mse and mean absolute error}
+df_scaled_pred <- predict(model_2, df_scaled_test)
+df_scaled_pred <- tibble(pred = df_scaled_pred)
+df_scaled_test_pred <- cbind(df_scaled_test, df_scaled_pred[c("pred")])
+df_scaled_test_pred <- df_scaled_test_pred %>% mutate(error = nmr_log - pred,
+                                            error2 = error^2,
+                                            abs_error = abs(error))
+mse <- sum(df_scaled_test_pred$error2)/nrow(df_scaled_test_pred)
+mae <- sum(df_scaled_test_pred$abs_error)/nrow(df_scaled_test_pred)
+```
+
+```{r}
+pred_int <- predict(model_2, df_scaled, interval = "prediction")
+pred_int_tib <- tibble(pred = pred_int[,1],
+                       lower = pred_int[,2],
+                       upper = pred_int[,3])
+pred_int_df <- cbind(df_scaled, pred_int_tib[c("pred", "lower", "upper")])
+pred_int_df <- cbind(pred_int_df, model_2_aug[c("country_name")])
+```
+
+```{r Back Transforming}
+pred_graph <- tibble(nmr = df_scaled$nmr,
+                     u5mr = df_scaled$u5mr,
+                     nmr_pred_log = pred_int_df$pred,
+                     nmr_pred_lower_log = pred_int_df$lower,
+                     nmr_pred_upper_log = pred_int_df$upper,
+                     nmr_pred = (exp(nmr_pred_log))*(u5mr - nmr),
+                     nmr_pred_lower = (exp(nmr_pred_lower_log))*(u5mr - nmr),
+                     nmr_pred_upper = (exp(nmr_pred_upper_log))*(u5mr - nmr),
+                     region = df_scaled$region,
+                     country_name = df_scaled$country_name)
+```
+
+```{r}
+pred_graph %>% ggplot(aes(x = u5mr, y = nmr_pred)) + geom_point(alpha = 0.3) +
+  geom_line(aes(y = nmr_pred_upper),
+            linetype = "dashed",
+            alpha = 0.3) + facet_wrap(~ region, scales = "free")
+```
+
